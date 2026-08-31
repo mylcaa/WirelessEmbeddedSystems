@@ -5,6 +5,7 @@
  */
 /* Includes */
 #include "common.h"
+#include "console.h"
 #include "gap.h"
 #include "led.h"
 
@@ -30,7 +31,7 @@ static void on_stack_reset(int reason) {
 
 static void on_stack_sync(void) {
     /* On stack sync, do advertising initialization */
-    scan_init();
+    device_init();
 }
 
 static void nimble_host_config_init(void) {
@@ -96,5 +97,9 @@ void app_main(void) {
 
     /* Start NimBLE host task thread and return */
     xTaskCreate(nimble_host_task, "NimBLE Central", 4*1024, NULL, 5, NULL);
+
+    /* Start the interactive console */
+    console_init();
+
     return;
 }

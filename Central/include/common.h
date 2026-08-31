@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 /* ESP APIs */
 #include "esp_log.h"

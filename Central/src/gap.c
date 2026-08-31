@@ -8,22 +8,55 @@
 #include "common.h"
 #include "led.h"
 
+/*************************************************************************************/
+/*                          PRIVATE DEFINITIONS AND TYPES                            */
+/*************************************************************************************/
+
 /* Private function declarations */
 inline static void format_addr(char *addr_str, uint8_t addr[]);
+static int parse_addr_str(const char *addr_str, ble_addr_t *addr);
 static void print_conn_desc(struct ble_gap_conn_desc *desc);
 static int gap_event_handler(struct ble_gap_event *event, void *arg);
-static int adv_report_handler(struct ble_gap_event *event, void *arg);
+static int scan_event_handler(struct ble_gap_event *event, void *arg);
 
 /* Private variables */
 static uint8_t own_addr_type;
 static uint8_t addr_val[6] = {0};
 static uint16_t conn_handle;
+static gap_state_t gap_state = GAP_STATE_IDLE;
 
+static ble_addr_t connected_addr;
+static char connected_name[32] = {0};
+
+typedef struct {
+    ble_addr_t addr;
+    char name[32];
+} discovered_dev_t;
+
+static discovered_dev_t discovered_devices[MAX_DISCOVERED_DEVICES];
+static int num_discovered = 0;
+
+/*************************************************************************************/
+/*                                HELPER FUNCTIONS                                   */
+/*************************************************************************************/
 
 /* Private functions */
 inline static void format_addr(char *addr_str, uint8_t addr[]) {
     sprintf(addr_str, "%02X:%02X:%02X:%02X:%02X:%02X", addr[0], addr[1],
             addr[2], addr[3], addr[4], addr[5]);
+}
+
+static int parse_addr_str(const char *addr_str, ble_addr_t *addr) {
+    int bytes[6] = {0};
+    if (sscanf(addr_str, "%02x:%02x:%02x:%02x:%02x:%02x",
+               &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4],
+               &bytes[5]) != 6) {
+        return -1;
+    }
+    for (int i = 0; i < 6; i++) {
+        addr->val[i] = (uint8_t)bytes[i];
+    }
+    return 0;
 }
 
 static void print_conn_desc(struct ble_gap_conn_desc *desc) {
@@ -52,28 +85,7 @@ static void print_conn_desc(struct ble_gap_conn_desc *desc) {
              desc->sec_state.bonded);
 }
 
-static void disconnect_from_dev(void) {
-    ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-
-    led_on(0, 16, 0); //red
-    vTaskDelay(pdMS_TO_TICKS(1000));
-}
-
 static int updt_conn_params(struct ble_gap_upd_params *params) {
-    /*struct ble_gap_upd_params params;
-
-    memset(&params, 0, sizeof(params));
-
-    params.itvl_min = 24;
-    params.itvl_max = 40;
-
-    params.latency = 0;
-
-    params.supervision_timeout = 400;
-
-    params.min_ce_len = 0;
-    params.max_ce_len = 0;*/
-
     int rc = ble_gap_update_params(conn_handle, params);
 
     if (rc != 0) {
@@ -84,62 +96,54 @@ static int updt_conn_params(struct ble_gap_upd_params *params) {
     return 0;
 }
 
-static void start_scanning(void) {
-    struct ble_gap_disc_params disc_params;
+/*************************************************************************************/
+/*                               CALLBACK FUNCTIONS                                  */
+/*************************************************************************************/
 
-    ESP_LOGE(TAG, "Started scanning");
-    led_on(0, 0, 16); //blue
-
-    memset(&disc_params, 0, sizeof(disc_params));
-
-    disc_params.passive = 1;
-    disc_params.itvl = 0; //scanning interval == 0 => use default val
-    disc_params.window = 0; // use default val
-    disc_params.filter_duplicates = 1;
-
-    ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &disc_params, adv_report_handler, NULL);
-}
-
-/**
- * @brief callback function associated with the discovery process. Adveritisng reports and 
- *        discovery termination events are handled through this function.
- */
-static int adv_report_handler(struct ble_gap_event *event, void *arg)
-{
+static int scan_event_handler(struct ble_gap_event *event, void *arg) {
     switch (event->type) {
-
-    case BLE_GAP_EVENT_DISC:
-        printf("Device found\n");
-
+    case BLE_GAP_EVENT_DISC: {
         struct ble_hs_adv_fields fields;
+        char addr_str[18] = {0};
 
-        int rc = ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data);
-
+        int rc = ble_hs_adv_parse_fields(&fields, event->disc.data,
+                                         event->disc.length_data);
         if (rc != 0) {
             return 0;
         }
 
-        if (fields.name != NULL && fields.name_len == strlen(TARGET_NAME) 
-            && memcmp(fields.name, TARGET_NAME, fields.name_len) == 0) {
-            printf("Found our Peripheral!\n");
-            ble_gap_disc_cancel(); //stop discovery
-            ESP_LOGE(TAG, "Started scanning");
+        format_addr(addr_str, event->disc.addr.val);
 
-            //set connection params
-           rc =  ble_gap_connect(own_addr_type, &event->disc.addr, 30000, NULL, gap_event_handler, NULL);
-            
-           if (rc != 0) {
-            printf("Connection unsuccessful, reason: %d\n", rc);
-            start_scanning();
-            return 0;
-           }
+        char name_buf[32] = {0};
+        if (fields.name != NULL && fields.name_len > 0) {
+            int len = fields.name_len < sizeof(name_buf) - 1 ? fields.name_len
+                                                             : sizeof(name_buf) - 1;
+            memcpy(name_buf, fields.name, len);
+            name_buf[len] = '\0';
         }
 
-    break;
+        ESP_LOGI(TAG, "Found device addr=%s type=%d name=%s", addr_str,
+                 event->disc.addr.type,
+                 name_buf[0] != '\0' ? name_buf : "(unknown)");
+
+        /* Store discovered device */
+        if (num_discovered < MAX_DISCOVERED_DEVICES) {
+            discovered_devices[num_discovered].addr = event->disc.addr;
+            strncpy(discovered_devices[num_discovered].name, name_buf,
+                    sizeof(discovered_devices[num_discovered].name) - 1);
+            discovered_devices[num_discovered].name[
+                sizeof(discovered_devices[num_discovered].name) - 1] = '\0';
+            num_discovered++;
+        }
+        break;
+    }
 
     case BLE_GAP_EVENT_DISC_COMPLETE:
-        printf("Scan complete\n");
-    break;
+        ESP_LOGI(TAG, "Scan complete");
+        if (gap_state == GAP_STATE_SCANNING) {
+            gap_state = GAP_STATE_IDLE;
+        }
+        break;
     }
 
     return 0;
@@ -173,14 +177,18 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 ESP_LOGE(TAG,
                          "failed to find connection by handle, error code: %d",
                          rc);
+                gap_state = GAP_STATE_IDLE;
                 return rc;
             }
 
             conn_handle = event->connect.conn_handle;
+            connected_addr = desc.peer_id_addr;
 
             /* Print connection descriptor and turn on the LED */
             print_conn_desc(&desc);
             led_on(16, 0, 0); //green
+
+            gap_state = GAP_STATE_CONNECTED;
 
             /* Try to update connection parameters */
             struct ble_gap_upd_params params = {.itvl_min = 24,
@@ -188,12 +196,12 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                                                 .latency = 3,
                                                 .supervision_timeout =
                                                     desc.supervision_timeout};
-        
+
             return updt_conn_params(&params);
         }
-        /* Connection failed, restart advertising */
+        /* Connection failed */
         else {
-            start_scanning();
+            gap_state = GAP_STATE_IDLE;
         }
         return rc;
 
@@ -203,14 +211,13 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         ESP_LOGI(TAG, "disconnected from peer; reason=%d",
                  event->disconnect.reason);
 
-        disconnect_from_dev();
-
         /* Turn off the LED */
         led_off();
         ESP_LOGE(TAG, "LED OFF");
 
-        /* Restart advertising */
-        start_scanning();
+        memset(&connected_addr, 0, sizeof(connected_addr));
+        connected_name[0] = '\0';
+        gap_state = GAP_STATE_IDLE;
         return rc;
 
     /* Connection parameters update event */
@@ -233,8 +240,12 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
     return rc;
 }
 
+/*************************************************************************************/
+/*                                  INIT FUNCTIONS                                   */
+/*************************************************************************************/
+
 /* Public functions */
-void scan_init(void) {
+void device_init(void) {
     /* Local variables */
     int rc = 0;
     char addr_str[18] = {0};
@@ -261,8 +272,6 @@ void scan_init(void) {
     }
     format_addr(addr_str, addr_val);
     ESP_LOGI(TAG, "device address: %s", addr_str);
-
-    start_scanning();
 }
 
 int gap_init(void) {
@@ -288,4 +297,165 @@ int gap_init(void) {
         return rc;
     }
     return rc;
+}
+
+/*************************************************************************************/
+/*                               CONSOLE FUNCTIONS                                   */
+/*************************************************************************************/
+
+gap_state_t gap_get_state(void) {
+    return gap_state;
+}
+
+const char *gap_state_str(void) {
+    switch (gap_state) {
+    case GAP_STATE_IDLE:
+        return "idle";
+    case GAP_STATE_SCANNING:
+        return "scanning";
+    case GAP_STATE_CONNECTING:
+        return "connecting";
+    case GAP_STATE_CONNECTED:
+        return "connected";
+    default:
+        return "unknown";
+    }
+}
+
+void gap_get_connected_info(char *addr_str, size_t addr_len, char *name, size_t name_len) {
+    if (gap_state != GAP_STATE_CONNECTED) {
+        if (addr_str && addr_len > 0) addr_str[0] = '\0';
+        if (name && name_len > 0) name[0] = '\0';
+        return;
+    }
+
+    if (addr_str && addr_len > 0) {
+        format_addr(addr_str, connected_addr.val);
+    }
+    if (name && name_len > 0) {
+        strncpy(name, connected_name, name_len - 1);
+        name[name_len - 1] = '\0';
+    }
+}
+
+int gap_scan_start(void) {
+    if (gap_state == GAP_STATE_SCANNING) {
+        ESP_LOGW(TAG, "already scanning");
+        return 0;
+    }
+    if (gap_state == GAP_STATE_CONNECTED || gap_state == GAP_STATE_CONNECTING) {
+        ESP_LOGE(TAG, "cannot scan while connecting/connected");
+        return -1;
+    }
+
+    struct ble_gap_disc_params disc_params;
+
+    ESP_LOGI(TAG, "Started scanning");
+    led_on(0, 0, 16); //blue
+
+    memset(&disc_params, 0, sizeof(disc_params));
+
+    disc_params.passive = 1;
+    disc_params.itvl = 0; //scanning interval == 0 => use default val
+    disc_params.window = 0; // use default val
+    disc_params.filter_duplicates = 1;
+
+    /* Clear previous discovery cache */
+    num_discovered = 0;
+    memset(discovered_devices, 0, sizeof(discovered_devices));
+
+    int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &disc_params,
+                          scan_event_handler, NULL);
+    if (rc == 0) {
+        gap_state = GAP_STATE_SCANNING;
+    } else {
+        ESP_LOGE(TAG, "failed to start scanning, error code: %d", rc);
+        led_off();
+        gap_state = GAP_STATE_IDLE;
+    }
+
+    return rc;
+}
+
+int gap_scan_stop(void) {
+    if (gap_state != GAP_STATE_SCANNING) {
+        ESP_LOGW(TAG, "not scanning");
+        return 0;
+    }
+
+    int rc = ble_gap_disc_cancel();
+    if (rc == 0) {
+        gap_state = GAP_STATE_IDLE;
+        led_off();
+        ESP_LOGI(TAG, "Scanning stopped");
+    } else {
+        ESP_LOGE(TAG, "failed to stop scanning, error code: %d", rc);
+    }
+    return rc;
+}
+
+int gap_connect_addr_str(const char *addr_str) {
+    if (gap_state == GAP_STATE_CONNECTED || gap_state == GAP_STATE_CONNECTING) {
+        ESP_LOGE(TAG, "already connected or connecting");
+        return -1;
+    }
+
+    /* Look up the address in the discovered cache */
+    for (int i = 0; i < num_discovered; i++) {
+        char found_addr[18] = {0};
+        format_addr(found_addr, discovered_devices[i].addr.val);
+        if (strcasecmp(found_addr, addr_str) == 0) {
+            ESP_LOGI(TAG, "Connecting to %s (%s)", addr_str,
+                     discovered_devices[i].name[0] != '\0'
+                         ? discovered_devices[i].name
+                         : "(unknown)");
+
+            // Have to stop discovery process before attempting to connect
+            ble_gap_disc_cancel();
+
+            gap_state = GAP_STATE_CONNECTING;
+            int rc = ble_gap_connect(own_addr_type, &discovered_devices[i].addr,
+                                     30000, NULL, gap_event_handler, NULL);
+            if (rc != 0) {
+                ESP_LOGE(TAG, "Connection unsuccessful, reason: %d", rc);
+                return rc;
+            }
+            strncpy(connected_name, discovered_devices[i].name,
+                    sizeof(connected_name) - 1);
+            connected_name[sizeof(connected_name) - 1] = '\0';
+            return 0;
+        }
+    }
+
+    ESP_LOGE(TAG, "Connection unsuccessful, wrong addr");
+    connected_name[0] = '\0';
+    return 0;
+}
+
+int gap_disconnect_by_addr_or_name(const char *addr_or_name) {
+    if (gap_state != GAP_STATE_CONNECTED) {
+        ESP_LOGE(TAG, "not connected");
+        return -1;
+    }
+
+    char addr_str[18] = {0};
+    format_addr(addr_str, connected_addr.val);
+
+    if (strcasecmp(addr_or_name, addr_str) != 0 &&
+        strcasecmp(addr_or_name, connected_name) != 0) {
+        ESP_LOGE(TAG, "not connected to %s", addr_or_name);
+        return -1;
+    }
+
+    int rc = ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "failed to disconnect, error code: %d", rc);
+        return rc;
+    }
+
+    gap_state = GAP_STATE_IDLE;
+    memset(&connected_addr, 0, sizeof(connected_addr));
+    connected_name[0] = '\0';
+    ESP_LOGI(TAG, "Disconnected from %s", addr_or_name);
+    return 0;
 }
