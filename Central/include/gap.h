@@ -44,4 +44,6 @@ int gap_scan_stop(void);
 int gap_connect_addr_str(const char *addr_str);
 int gap_disconnect_by_addr_or_name(const char *addr_or_name);
 
+uint16_t gap_get_conn_handle(void);
+
 #endif // GAP_SVC_H

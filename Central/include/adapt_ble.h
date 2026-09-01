@@ -19,42 +19,79 @@
 #include <stdbool.h>
 #include "esp_nimble_hci.h"
 
+/* Public function declarations */
+
 /**
- * @brief latency estimator
- * 
- * @param t_add the moment in which the packet is sent from the host to the controller
- * @param t_free the moment in which the buffer allocated in the controller for the packet is freed
- * @param t_ce length of connection event
- * @param t_ci length of connection interval
- * 
- * @retval ECI the number of transmissions required to send the packet 
+ * @brief AdaptBLE latency estimator.
+ *
+ * Calculates the number of connection intervals a packet spent between
+ * host submission and controller buffer release, compensating for the
+ * connection event duration.
+ *
+ * ECI_i = ceil((t_TX - t_CE) / T_CI)
+ *
+ * @param t_add Timestamp (us) when the packet was submitted to the controller.
+ * @param t_free Timestamp (us) when the controller buffer was released.
+ * @param t_ce Maximum connection event length in microseconds.
+ * @param t_ci Current connection interval in microseconds.
+ * @return Estimated ECI_i value.
  */
 uint32_t adapt_ble_latency_estimator(uint64_t t_add, uint64_t t_free,
                                      uint32_t t_ce, uint32_t t_ci);
 
 /**
- * @brief AdaptBLE connection interval calculator.
+ * @brief Read the latest ACL packet timestamps captured by the HCI layer.
  *
- * Computes a new connection interval T_CI based on the worst-case ECI_max
- * observed over the recent M rounds and a latency threshold t_th.
- *
- * T_CI = floor((t_th - t_CE) / ECI_max)
- *
- * @param t_ce Maximum connection event length in microseconds.
- * @param eci_max Maximum ECI value over the recent M rounds.
- * @return New connection interval T_CI in microseconds.
- */
-uint32_t adapt_ble_connection_interval_calculator(uint32_t t_ce,
-                                                  uint32_t eci_max);
-
-/**
- * @brief get timestamps for calculating ECI of a packet
+ * The timestamps are taken from the moment the host submits an ACL packet
+ * to the controller and the moment the controller reports that the buffer
+ * has been freed via HCI_Number_Of_Completed_Packets.
  *
  * @param t_add Output: timestamp (us) when the packet was submitted.
  * @param t_free Output: timestamp (us) when the buffer was freed.
- * @return true if a new pair was available and has been copied.
+ * @return true if a fresh pair was available and has been copied.
  */
 bool adapt_ble_read_acl_timestamps(uint64_t *t_add, uint64_t *t_free);
+
+/**
+ * @brief Set the current connection interval used by the latency estimator.
+ *
+ * Should be updated whenever the BLE connection interval changes.
+ *
+ * @param t_ci_ms Current connection interval in milliseconds.
+ */
+void adapt_ble_set_connection_interval(uint32_t t_ci_ms);
+
+/**
+ * @brief Start the periodic AdaptBLE adaptation task.
+ *
+ * The task runs every UPDATE_PERIOD_MS (1 second by default) and calls
+ * adapt_ble_run_once().
+ */
+void adapt_ble_start(void);
+
+/**
+ * @brief Send the requested TX power level to the slave via GATT write.
+ *
+ * The slave must expose a writable characteristic with the handle defined
+ * by ADAPT_BLE_SLAVE_TX_PWR_HANDLE. On receiving the value, the slave
+ * applies it locally with esp_ble_tx_power_set().
+ *
+ * @param conn_handle Connection handle of the slave.
+ * @param tx_power_dbm Requested TX power in dBm.
+ * @return 0 on success; NimBLE error code on failure.
+ */
+int set_slave_tx_power(uint16_t conn_handle, int8_t tx_power_dbm);
+
+/**
+ * @brief Notify the AdaptBLE module that a PHY update has completed.
+ *
+ * This should be called from the BLE_GAP_EVENT_PHY_UPDATE_COMPLETE handler.
+ * It is used to commit the pending LUT position only after the slave has
+ * acknowledged the PHY change.
+ *
+ * @param status 0 on success, BLE error code on failure.
+ */
+void adapt_ble_on_phy_update_complete(uint8_t status);
 
 #endif /* ADAPT_BLE */
 

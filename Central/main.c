@@ -7,6 +7,10 @@
 #include "gap.h"
 #include "led.h"
 
+#ifdef ADAPT_BLE
+#include "adapt_ble.h"
+#endif
+
 /*************************************************************************************/
 /*                             FUNCTIONS DECLARATIONS                                */
 /*************************************************************************************/
@@ -107,6 +111,11 @@ void app_main(void) {
 
     /* Start the interactive console */
     console_init();
+
+#ifdef ADAPT_BLE
+    /* Start the periodic AdaptBLE adaptation task */
+    adapt_ble_start();
+#endif
 
     return;
 }

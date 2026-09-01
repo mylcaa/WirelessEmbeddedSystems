@@ -6,12 +6,15 @@
 #include "common.h"
 #include "led.h"
 
+#ifdef ADAPT_BLE
+#include "adapt_ble.h"
+#endif
+
 /*************************************************************************************/
 /*                          PRIVATE DEFINITIONS AND TYPES                            */
 /*************************************************************************************/
 
 inline static void format_addr(char *addr_str, uint8_t addr[]);
-static int parse_addr_str(const char *addr_str, ble_addr_t *addr);
 static void print_conn_desc(struct ble_gap_conn_desc *desc);
 static int gap_event_handler(struct ble_gap_event *event, void *arg);
 static int scan_event_handler(struct ble_gap_event *event, void *arg);
@@ -42,19 +45,6 @@ inline static void format_addr(char *addr_str, uint8_t addr[]) {
             addr[2], addr[3], addr[4], addr[5]);
 }
 
-static int parse_addr_str(const char *addr_str, ble_addr_t *addr) {
-    int bytes[6] = {0};
-    if (sscanf(addr_str, "%02x:%02x:%02x:%02x:%02x:%02x",
-               &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4],
-               &bytes[5]) != 6) {
-        return -1;
-    }
-    for (int i = 0; i < 6; i++) {
-        addr->val[i] = (uint8_t)bytes[i];
-    }
-    return 0;
-}
-
 static void print_conn_desc(struct ble_gap_conn_desc *desc) {
     /* Local variables */
     char addr_str[18] = {0};
@@ -79,17 +69,6 @@ static void print_conn_desc(struct ble_gap_conn_desc *desc) {
              desc->conn_itvl, desc->conn_latency, desc->supervision_timeout,
              desc->sec_state.encrypted, desc->sec_state.authenticated,
              desc->sec_state.bonded);
-}
-
-static int updt_conn_params(struct ble_gap_upd_params *params) {
-    int rc = ble_gap_update_params(conn_handle, params);
-
-    if (rc != 0) {
-        ESP_LOGE(TAG, "failed to update connection parameters, error code: %d", rc);
-        return rc;
-    }
-
-    return 0;
 }
 
 /*************************************************************************************/
@@ -186,14 +165,9 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 
             gap_state = GAP_STATE_CONNECTED;
 
-            /* Try to update connection parameters */
-            /*struct ble_gap_upd_params params = {.itvl_min = 24,
-                                                .itvl_max = 40,
-                                                .latency = 3,
-                                                .supervision_timeout =
-                                                    desc.supervision_timeout};
-
-            return updt_conn_params(&params);*/
+#ifdef ADAPT_BLE
+            adapt_ble_set_connection_interval((desc.conn_itvl * 1250U) / 1000U);
+#endif
         }
         /* Connection failed */
         else {
@@ -230,6 +204,21 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             return rc;
         }
         print_conn_desc(&desc);
+
+#ifdef ADAPT_BLE
+        adapt_ble_set_connection_interval((desc.conn_itvl * 1250U) / 1000U);
+#endif
+        return rc;
+
+    /* PHY update complete event */
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        ESP_LOGI(TAG, "PHY update complete: status=%d, tx=%d, rx=%d",
+                 event->phy_updated.status,
+                 event->phy_updated.tx_phy,
+                 event->phy_updated.rx_phy);
+#ifdef ADAPT_BLE
+        adapt_ble_on_phy_update_complete(event->phy_updated.status);
+#endif
         return rc;
     }
 
@@ -453,4 +442,9 @@ int gap_disconnect_by_addr_or_name(const char *addr_or_name) {
     connected_name[0] = '\0';
     ESP_LOGI(TAG, "Disconnected from %s", addr_or_name);
     return 0;
+}
+
+
+uint16_t gap_get_conn_handle(void) {
+    return conn_handle;
 }
