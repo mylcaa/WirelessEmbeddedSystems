@@ -1,9 +1,7 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
+
 #include "gap.h"
 #include "common.h"
 #include "led.h"
@@ -12,7 +10,6 @@
 /*                          PRIVATE DEFINITIONS AND TYPES                            */
 /*************************************************************************************/
 
-/* Private function declarations */
 inline static void format_addr(char *addr_str, uint8_t addr[]);
 static int parse_addr_str(const char *addr_str, ble_addr_t *addr);
 static void print_conn_desc(struct ble_gap_conn_desc *desc);
@@ -40,7 +37,6 @@ static int num_discovered = 0;
 /*                                HELPER FUNCTIONS                                   */
 /*************************************************************************************/
 
-/* Private functions */
 inline static void format_addr(char *addr_str, uint8_t addr[]) {
     sprintf(addr_str, "%02X:%02X:%02X:%02X:%02X:%02X", addr[0], addr[1],
             addr[2], addr[3], addr[4], addr[5]);
@@ -191,13 +187,13 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             gap_state = GAP_STATE_CONNECTED;
 
             /* Try to update connection parameters */
-            struct ble_gap_upd_params params = {.itvl_min = 24,
+            /*struct ble_gap_upd_params params = {.itvl_min = 24,
                                                 .itvl_max = 40,
                                                 .latency = 3,
                                                 .supervision_timeout =
                                                     desc.supervision_timeout};
 
-            return updt_conn_params(&params);
+            return updt_conn_params(&params);*/
         }
         /* Connection failed */
         else {
@@ -244,7 +240,6 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 /*                                  INIT FUNCTIONS                                   */
 /*************************************************************************************/
 
-/* Public functions */
 void device_init(void) {
     /* Local variables */
     int rc = 0;

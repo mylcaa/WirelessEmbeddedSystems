@@ -1,9 +1,6 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
 #include "console.h"
 #include "common.h"
 #include "gap.h"
@@ -15,7 +12,6 @@
 /*                          PRIVATE DEFINITIONS AND TYPES                            */
 /*************************************************************************************/
 
-/* Private function declarations */
 static int cmd_scan(int argc, char **argv);
 static int cmd_stop_scan(int argc, char **argv);
 static int cmd_connect(int argc, char **argv);
@@ -36,7 +32,6 @@ static struct {
 /*                               CALLBACK FUNCTIONS                                  */
 /*************************************************************************************/
 
-/* Private functions */
 static int cmd_scan(int argc, char **argv) {
     int rc = gap_scan_start();
     if (rc == 0) {
@@ -115,7 +110,6 @@ static int cmd_get_state(int argc, char **argv) {
 /*                                  INIT FUNCTIONS                                   */
 /*************************************************************************************/
 
-/* Public functions */
 void console_init(void) {
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "Central> ";

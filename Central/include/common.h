@@ -1,12 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
+
 #ifndef COMMON_H
 #define COMMON_H
 
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
+
 /* STD APIs */
 #include <stdbool.h>
 #include <stdio.h>
@@ -30,7 +29,10 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 
-/* Defines */
+/*************************************************************************************/
+/*                                  DEFINITIONS                                      */
+/*************************************************************************************/
+
 #define TAG "Central"
 #define DEVICE_NAME "Central"
 

@@ -1,24 +1,27 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
+
 #include "common.h"
 #include "console.h"
 #include "gap.h"
 #include "led.h"
 
-/* Library function declarations */
+/*************************************************************************************/
+/*                             FUNCTIONS DECLARATIONS                                */
+/*************************************************************************************/
+
 void ble_store_config_init(void);
 
-/* Private function declarations */
 static void on_stack_reset(int reason);
 static void on_stack_sync(void);
 static void nimble_host_config_init(void);
 static void nimble_host_task(void *param);
 
-/* Private functions */
+/*************************************************************************************/
+/*                               CALLBACK FUNCTIONS                                  */
+/*************************************************************************************/
+
 /*
  *  Stack event callback functions
  *      - on_stack_reset is called when host resets BLE stack due to errors
@@ -54,6 +57,10 @@ static void nimble_host_task(void *param) {
     /* Clean up at exit */
     vTaskDelete(NULL);
 }
+
+/*************************************************************************************/
+/*                                       MAIN                                        */
+/*************************************************************************************/
 
 void app_main(void) {
     /* Local variables */

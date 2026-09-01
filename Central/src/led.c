@@ -1,20 +1,27 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
 #include "led.h"
 #include "common.h"
 
-/* Private variables */
+/*************************************************************************************/
+/*                           PRIVATE DEFINITIONS AND TYPES                           */
+/*************************************************************************************/
+
 static uint8_t led_state = false;
 
 #ifdef CONFIG_BLINK_LED_STRIP
 static led_strip_handle_t led_strip;
 #endif
+ 
+#ifndef CONFIG_BLINK_GPIO
+#define CONFIG_BLINK_GPIO 38 // for ESP32 S3
+#endif /* CONFIG_BLINK_GPIO */
 
-/* Public functions */
+/*************************************************************************************/
+/*                                PUBLIC FUNCTIONS                                   */
+/*************************************************************************************/
+
 uint8_t get_led_state(void) { return led_state; }
 
 #ifdef CONFIG_BLINK_LED_STRIP
