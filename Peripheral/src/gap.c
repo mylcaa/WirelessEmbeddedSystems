@@ -1,12 +1,15 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
+
 #include "gap.h"
 #include "common.h"
+#include "gatt.h"
 #include "led.h"
+
+/*************************************************************************************/
+/*                          PRIVATE DEFINITIONS AND TYPES                            */
+/*************************************************************************************/
 
 /* Private function declarations */
 inline static void format_addr(char *addr_str, uint8_t addr[]);
@@ -18,6 +21,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg);
 static uint8_t own_addr_type;
 static uint8_t addr_val[6] = {0};
 static uint8_t esp_uri[] = {BLE_GAP_URI_PREFIX_HTTPS, '/', '/', 'e', 's', 'p', 'r', 'e', 's', 's', 'i', 'f', '.', 'c', 'o', 'm'};
+
+/*************************************************************************************/
+/*                                 HELPER FUNCTIONS                                  */
+/*************************************************************************************/
 
 /* Private functions */
 inline static void format_addr(char *addr_str, uint8_t addr[]) {
@@ -50,6 +57,11 @@ static void print_conn_desc(struct ble_gap_conn_desc *desc) {
              desc->sec_state.encrypted, desc->sec_state.authenticated,
              desc->sec_state.bonded);
 }
+
+
+/*************************************************************************************/
+/*                                 PRIVATE FUNCTIONS                                 */
+/*************************************************************************************/
 
 static void start_advertising(void) {
     /* Local variables */
@@ -162,6 +174,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             led_on();
              ESP_LOGE(TAG, "LED ON");
 
+            ESP_LOGI(TAG,
+                     "AdaptBLE TX-power characteristic handle: 0x%04X",
+                     gatt_svr_get_tx_pwr_handle());
+
             /* Try to update connection parameters */
             /*struct ble_gap_upd_params params = {.itvl_min = desc.conn_itvl,
                                                 .itvl_max = desc.conn_itvl,
@@ -212,12 +228,25 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         }
         print_conn_desc(&desc);
         return rc;
+
+    /* PHY update complete event */
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        ESP_LOGI(TAG,
+                 "PHY update complete: status=%d, tx_phy=%d, rx_phy=%d",
+                 event->phy_updated.status,
+                 event->phy_updated.tx_phy,
+                 event->phy_updated.rx_phy);
+        return rc;
     }
 
     return rc;
 }
 
-/* Public functions */
+
+/*************************************************************************************/
+/*                                   INIT FUNCTIONS                                  */
+/*************************************************************************************/
+
 void adv_init(void) {
     /* Local variables */
     int rc = 0;

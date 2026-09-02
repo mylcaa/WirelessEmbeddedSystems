@@ -6,6 +6,7 @@
 /* Includes */
 #include "common.h"
 #include "gap.h"
+#include "gatt.h"
 #include "led.h"
 
 /* Library function declarations */
@@ -90,6 +91,9 @@ void app_main(void) {
         return;
     }
 #endif
+
+    /* AdaptBLE TX-power GATT service initialization */
+    gatt_svr_init();
 
     /* NimBLE host configuration initialization */
     nimble_host_config_init();
