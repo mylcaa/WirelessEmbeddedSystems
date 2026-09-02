@@ -1,12 +1,10 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
 #ifndef ADAPT_BLE_H
 #define ADAPT_BLE_H
 
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
+
 #include "sdkconfig.h"
 
 #ifdef CONFIG_ADAPT_BLE
@@ -19,7 +17,19 @@
 #include <stdbool.h>
 #include "esp_nimble_hci.h"
 
-/* Public function declarations */
+/*************************************************************************************/
+/*                                   PUBLIC FUNCTIONS                                */
+/*************************************************************************************/
+
+
+/**
+ * @brief captures time instant in which the packet is sent/received from the controller
+ * 
+ * @param timestamp - either the moment at which the packet is sent to the controller or
+ *                    the moment at which packets are forwarded to the host from the controller
+ * @param complete - true if controller is sending the packets to the host, false otherwise
+ */
+void ttx_pending_fifo_push(uint64_t timestamp, bool complete);
 
 /**
  * @brief AdaptBLE latency estimator.

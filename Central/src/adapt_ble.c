@@ -1,9 +1,6 @@
-/*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-/* Includes */
+/*************************************************************************************/
+/*                                     INCLUDES                                      */
+/*************************************************************************************/
 #include "adapt_ble.h"
 #include "common.h"
 #include "gap.h"
@@ -12,6 +9,7 @@
 #include "esp_bt.h"
 
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #ifdef ADAPT_BLE
@@ -34,6 +32,8 @@
 
 #define DATA_RATE_NUM        4
 #define TRANSMISSION_PWR_NUM 10
+
+#define TTX_FIFO_SIZE 50
 
 /* Handle for the slave TX-power GATT characteristic (from menuconfig) */
 #ifdef CONFIG_ADAPT_BLE_SLAVE_TX_PWR_HANDLE
@@ -70,6 +70,21 @@ static const lut_t energy_consumption_lut[DATA_RATE_NUM][TRANSMISSION_PWR_NUM] =
     {{DATA_RATE_500k, -21}, {DATA_RATE_500k, -18}, {DATA_RATE_500k, -15}, {DATA_RATE_500k, -12}, {DATA_RATE_500k, -9}, {DATA_RATE_500k, -6}, {DATA_RATE_500k, -3}, {DATA_RATE_500k, 0}, {DATA_RATE_500k, 3}, {DATA_RATE_500k, 6}},
     {{DATA_RATE_125k, -21}, {DATA_RATE_125k, -18}, {DATA_RATE_125k, -15}, {DATA_RATE_125k, -12}, {DATA_RATE_125k, -9}, {DATA_RATE_125k, -6}, {DATA_RATE_125k, -3}, {DATA_RATE_125k, 0}, {DATA_RATE_125k, 3}, {DATA_RATE_125k, 6}}
 };
+
+typedef struct {
+    uint64_t t_add;
+    uint64_t t_free;
+    bool complete;
+} timestamp_t;
+
+static timestamp_t ttx_pending_fifo[TTX_FIFO_SIZE] = {{0, 0, false}};
+static uint8_t add_fit = 0;   /* next slot to write a t_add */
+static uint8_t free_fit = 0;  /* oldest pending t_add to mark with t_free */
+static uint8_t tx_fit = 0;    /* next completed entry to read */
+static uint8_t pending_count = 0;  /* t_add submitted but not completed */
+static uint8_t complete_count = 0; /* completed entries ready to read */
+
+static SemaphoreHandle_t ttx_fifo_mutex = NULL;
 
 /* ECI measurement history (circular buffer) */
 static uint8_t ECI[NUM_MEASUREMENTS] = {0};
@@ -423,17 +438,67 @@ static void apply_connection_interval(uint16_t conn_handle,
 /*                                PUBLIC FUNCTIONS                                   */
 /*************************************************************************************/
 
+void ttx_pending_fifo_push(uint64_t timestamp, bool complete) {
+    if (ttx_fifo_mutex == NULL) {
+        return;
+    }
+
+    xSemaphoreTake(ttx_fifo_mutex, portMAX_DELAY);
+
+    if (!complete) {
+        /* t_add: make room if the FIFO is full */
+        if ((pending_count + complete_count) >= TTX_FIFO_SIZE) {
+            ESP_LOGW(TAG, "TTX FIFO full; dropping oldest sample");
+            if (complete_count > 0) {
+                tx_fit = (tx_fit + 1) % TTX_FIFO_SIZE;
+                complete_count--;
+            } else if (pending_count > 0) {
+                free_fit = (free_fit + 1) % TTX_FIFO_SIZE;
+                pending_count--;
+            }
+        }
+
+        ttx_pending_fifo[add_fit].t_add = timestamp;
+        ttx_pending_fifo[add_fit].t_free = 0;
+        ttx_pending_fifo[add_fit].complete = false;
+        add_fit = (add_fit + 1) % TTX_FIFO_SIZE;
+        pending_count++;
+    } else {
+        /* t_free: pair with the oldest pending t_add */
+        if (pending_count == 0) {
+            ESP_LOGW(TAG, "TTX FIFO: t_free without pending t_add, ignoring");
+        } else {
+            ttx_pending_fifo[free_fit].t_free = timestamp;
+            ttx_pending_fifo[free_fit].complete = true;
+            free_fit = (free_fit + 1) % TTX_FIFO_SIZE;
+            pending_count--;
+            complete_count++;
+        }
+    }
+
+    xSemaphoreGive(ttx_fifo_mutex);
+}
+
 bool adapt_ble_read_acl_timestamps(uint64_t *t_add, uint64_t *t_free) {
-    if (t_add == NULL || t_free == NULL) {
+    if (ttx_fifo_mutex == NULL || t_add == NULL || t_free == NULL) {
         return false;
     }
 
-    if (!adapt_ble_acl_timestamps_ready()) {
+    xSemaphoreTake(ttx_fifo_mutex, portMAX_DELAY);
+
+    if (complete_count == 0) {
+        xSemaphoreGive(ttx_fifo_mutex);
+        ESP_LOGD(TAG, "No new NCP measurement");
         return false;
     }
 
-    *t_add = adapt_ble_get_acl_t_add();
-    *t_free = adapt_ble_get_acl_t_free();
+    *t_add = ttx_pending_fifo[tx_fit].t_add;
+    *t_free = ttx_pending_fifo[tx_fit].t_free;
+    ttx_pending_fifo[tx_fit] = (timestamp_t){0, 0, false};
+    tx_fit = (tx_fit + 1) % TTX_FIFO_SIZE;
+    complete_count--;
+
+    xSemaphoreGive(ttx_fifo_mutex);
     return true;
 }
 
@@ -447,9 +512,12 @@ void adapt_ble_set_connection_interval(uint32_t t_ci_ms) {
 
 static void adapt_ble_run_once(void) {
     /* Step 1: estimate current ECI from a fresh ACL timestamp pair */
-    uint64_t t_add = 0;
-    uint64_t t_free = 0;
-    bool have_sample = adapt_ble_read_acl_timestamps(&t_add, &t_free);
+    uint64_t t_add;
+    uint64_t t_free;
+
+    if(!adapt_ble_read_acl_timestamps(&t_add, &t_free)) {
+        return;
+    }
 
     /* Step 2: compute ECI_max over the last M rounds and calculate new T_CI */
     uint32_t recommended_ci_us = 0;
@@ -481,13 +549,11 @@ static void adapt_ble_run_once(void) {
     }
 
     /* Step 5: store the newly measured ECI for the next round */
-    if (have_sample) {
-        uint32_t eci = adapt_ble_latency_estimator(t_add, t_free,
-                                                   MAX_CONN_EVENT_DURATION_US,
-                                                   g_conn_interval_us);
-        ECI[g_curr_ECI] = (uint8_t)eci;
-        g_curr_ECI = (g_curr_ECI + 1) % NUM_MEASUREMENTS;
-    }
+    uint32_t eci = adapt_ble_latency_estimator(t_add, t_free,
+                                                MAX_CONN_EVENT_DURATION_US,
+                                                g_conn_interval_us);
+    ECI[g_curr_ECI] = (uint8_t)eci;
+    g_curr_ECI = (g_curr_ECI + 1) % NUM_MEASUREMENTS;
 
     g_round_index++;
 }
@@ -504,6 +570,12 @@ static void adapt_ble_task(void *param) {
 }
 
 void adapt_ble_start(void) {
+    ttx_fifo_mutex = xSemaphoreCreateMutex();
+    if (ttx_fifo_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create TTX FIFO mutex");
+        return;
+    }
+
     xTaskCreate(adapt_ble_task, "AdaptBLE", 4 * 1024, NULL, 5, NULL);
 }
 
