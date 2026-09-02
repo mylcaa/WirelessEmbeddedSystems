@@ -2,6 +2,7 @@
 /*                                     INCLUDES                                      */
 /*************************************************************************************/
 #include "adapt_ble.h"
+#include "adapt_ble_gatt.h"
 #include "common.h"
 #include "gap.h"
 #include "host/ble_gatt.h"
@@ -23,7 +24,8 @@
 #define NUM_MEASUREMENTS           50
 #define LINK_QUALITY_TH_LOW        0.05f
 #define LINK_QUALITY_TH_HIGH       0.2f
-#define MAX_CONN_EVENT_DURATION_MS 10
+#define MAX_CONN_EVENT_DURATION_MS 10 
+#define MAX_CONN_EVENT_DURATION    16 // 10ms expressed in units of 0.625ms
 
 /* Convert configuration constants to microseconds */
 #define LATENCY_THRESH_US          (LATENCY_THRESH_MS * 1000U)
@@ -39,7 +41,7 @@
 #ifdef CONFIG_ADAPT_BLE_SLAVE_TX_PWR_HANDLE
 #define ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE CONFIG_ADAPT_BLE_SLAVE_TX_PWR_HANDLE
 #else
-#define ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE 0x002A
+#define ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE 0x0008
 #endif
 
 typedef enum {
@@ -81,8 +83,6 @@ static timestamp_t ttx_pending_fifo[TTX_FIFO_SIZE] = {{0, 0, false}};
 static uint8_t add_fit = 0;   /* next slot to write a t_add */
 static uint8_t free_fit = 0;  /* oldest pending t_add to mark with t_free */
 static uint8_t tx_fit = 0;    /* next completed entry to read */
-static uint8_t pending_count = 0;  /* t_add submitted but not completed */
-static uint8_t complete_count = 0; /* completed entries ready to read */
 
 static SemaphoreHandle_t ttx_fifo_mutex = NULL;
 
@@ -101,8 +101,15 @@ static lut_index_t g_pending_pos = {1, 7};
 static bool g_phy_pending = false;
 static bool g_txpwr_pending = false;
 
+/* Track which data rates are supported by the remote device */
+static bool g_rate_supported[DATA_RATE_NUM] = {true, true, true, true};
+
 /* Connection interval state */
 static uint32_t g_conn_interval_us = 400 * 1000U; /* default 400 ms */
+
+/* AdaptBLE task control */
+static volatile bool g_adapt_ble_running = false;
+static TaskHandle_t g_adapt_ble_task_handle = NULL;
 
 /*************************************************************************************/
 /*                                  HELPER FUNCTIONS                                 */
@@ -224,18 +231,18 @@ static int set_slave_tx_power_cb(uint16_t conn_handle,
 }
 
 int set_slave_tx_power(uint16_t conn_handle, int8_t tx_power_dbm) {
-    int rc = ble_gattc_write_flat(conn_handle,
-                                   ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE,
+    uint16_t handle = adapt_ble_gatt_get_tx_pwr_handle();
+    int rc = ble_gattc_write_flat(conn_handle, handle,
                                    &tx_power_dbm, sizeof(tx_power_dbm),
                                    set_slave_tx_power_cb,
                                    (void *)(intptr_t)tx_power_dbm);
     if (rc != 0) {
         ESP_LOGE(TAG,
                  "set_slave_tx_power failed: handle=0x%04X, pwr=%d dBm, rc=%d",
-                 ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE, tx_power_dbm, rc);
+                 handle, tx_power_dbm, rc);
     } else {
         ESP_LOGI(TAG, "Sent TX power %d dBm to slave (handle=0x%04X)",
-                 tx_power_dbm, ADAPT_BLE_SLAVE_TX_PWR_ATTR_HANDLE);
+                 tx_power_dbm, handle);
     }
     return rc;
 }
@@ -320,26 +327,55 @@ static void request_lut_update(lut_index_t new_pos) {
     }
 }
 
+static int8_t next_supported_y_up(int8_t start_y) {
+    for (int8_t y = start_y; y < DATA_RATE_NUM; y++) {
+        if (g_rate_supported[y]) {
+            return y;
+        }
+    }
+    return -1;
+}
+
 static void increase_link_quality(void) {
     lut_index_t new_pos = g_curr_pos;
 
     if (new_pos.x < (TRANSMISSION_PWR_NUM - 1)) {
         new_pos.x++;
-    } else if (new_pos.y < (DATA_RATE_NUM - 1)) {
-        new_pos.y++;
     } else {
-        /* Already at the highest energy point */
-        return;
+        int8_t ny = next_supported_y_up(new_pos.y + 1);
+        if (ny > new_pos.y) {
+            new_pos.y = ny;
+        } else {
+            /* Already at the highest energy point among supported rates */
+            return;
+        }
     }
 
     request_lut_update(new_pos);
+}
+
+static int8_t next_supported_y_down(int8_t start_y) {
+    for (int8_t y = start_y; y >= 0; y--) {
+        if (g_rate_supported[y]) {
+            return y;
+        }
+    }
+    return -1;
 }
 
 static void decrease_energy_consumption(void) {
     lut_index_t new_pos = g_curr_pos;
 
     if (new_pos.y > 0) {
-        new_pos.y--;
+        int8_t ny = next_supported_y_down(new_pos.y - 1);
+        if (ny >= 0) {
+            new_pos.y = ny;
+        } else if (new_pos.x > 0) {
+            new_pos.x--;
+        } else {
+            /* Already at the lowest energy point */
+            return;
+        }
     } else if (new_pos.x > 0) {
         new_pos.x--;
     } else {
@@ -353,6 +389,7 @@ static void decrease_energy_consumption(void) {
 static void data_rate_and_tx_pwr_manager(void) {
     float rt_ratio = retransmission_ratio_calc();
 
+    ESP_LOGE(TAG, "th_low = %f rt_ratio=%f th_high=%f", LINK_QUALITY_TH_LOW, rt_ratio, LINK_QUALITY_TH_HIGH);
     if (rt_ratio > LINK_QUALITY_TH_HIGH) {
         increase_link_quality();
     } else if (rt_ratio < LINK_QUALITY_TH_LOW) {
@@ -363,6 +400,14 @@ static void data_rate_and_tx_pwr_manager(void) {
 void adapt_ble_on_phy_update_complete(uint8_t status) {
     if (status != 0) {
         ESP_LOGE(TAG, "PHY update failed: status=%d", status);
+
+        if (status == BLE_ERR_UNSUPP_REM_FEATURE) {
+            g_rate_supported[g_pending_pos.y] = false;
+            ESP_LOGW(TAG,
+                     "Remote does not support data rate at L_DR=%d; marked unsupported",
+                     g_pending_pos.y);
+        }
+
         abort_pending_lut_update("PHY update failed");
         return;
     }
@@ -419,7 +464,7 @@ static void apply_connection_interval(uint16_t conn_handle,
         .latency = desc.conn_latency,
         .supervision_timeout = desc.supervision_timeout,
         .min_ce_len = 0,
-        .max_ce_len = 0,
+        .max_ce_len = MAX_CONN_EVENT_DURATION,
     };
 
     rc = ble_gap_update_params(conn_handle, &params);
@@ -446,34 +491,14 @@ void ttx_pending_fifo_push(uint64_t timestamp, bool complete) {
     xSemaphoreTake(ttx_fifo_mutex, portMAX_DELAY);
 
     if (!complete) {
-        /* t_add: make room if the FIFO is full */
-        if ((pending_count + complete_count) >= TTX_FIFO_SIZE) {
-            ESP_LOGW(TAG, "TTX FIFO full; dropping oldest sample");
-            if (complete_count > 0) {
-                tx_fit = (tx_fit + 1) % TTX_FIFO_SIZE;
-                complete_count--;
-            } else if (pending_count > 0) {
-                free_fit = (free_fit + 1) % TTX_FIFO_SIZE;
-                pending_count--;
-            }
-        }
-
         ttx_pending_fifo[add_fit].t_add = timestamp;
         ttx_pending_fifo[add_fit].t_free = 0;
         ttx_pending_fifo[add_fit].complete = false;
         add_fit = (add_fit + 1) % TTX_FIFO_SIZE;
-        pending_count++;
     } else {
-        /* t_free: pair with the oldest pending t_add */
-        if (pending_count == 0) {
-            ESP_LOGW(TAG, "TTX FIFO: t_free without pending t_add, ignoring");
-        } else {
-            ttx_pending_fifo[free_fit].t_free = timestamp;
-            ttx_pending_fifo[free_fit].complete = true;
-            free_fit = (free_fit + 1) % TTX_FIFO_SIZE;
-            pending_count--;
-            complete_count++;
-        }
+        ttx_pending_fifo[free_fit].t_free = timestamp;
+        ttx_pending_fifo[free_fit].complete = true;
+        free_fit = (free_fit + 1) % TTX_FIFO_SIZE;
     }
 
     xSemaphoreGive(ttx_fifo_mutex);
@@ -484,19 +509,16 @@ bool adapt_ble_read_acl_timestamps(uint64_t *t_add, uint64_t *t_free) {
         return false;
     }
 
-    xSemaphoreTake(ttx_fifo_mutex, portMAX_DELAY);
-
-    if (complete_count == 0) {
-        xSemaphoreGive(ttx_fifo_mutex);
-        ESP_LOGD(TAG, "No new NCP measurement");
+    if (!ttx_pending_fifo[tx_fit].complete) {
         return false;
     }
+
+    xSemaphoreTake(ttx_fifo_mutex, portMAX_DELAY);
 
     *t_add = ttx_pending_fifo[tx_fit].t_add;
     *t_free = ttx_pending_fifo[tx_fit].t_free;
     ttx_pending_fifo[tx_fit] = (timestamp_t){0, 0, false};
     tx_fit = (tx_fit + 1) % TTX_FIFO_SIZE;
-    complete_count--;
 
     xSemaphoreGive(ttx_fifo_mutex);
     return true;
@@ -564,19 +586,38 @@ static void adapt_ble_task(void *param) {
     ESP_LOGI(TAG, "AdaptBLE periodic task started (period=%d ms)", UPDATE_PERIOD_MS);
 
     for (;;) {
-        adapt_ble_run_once();
+        if (g_adapt_ble_running) {
+            adapt_ble_run_once();
+        }
         vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
     }
 }
 
 void adapt_ble_start(void) {
-    ttx_fifo_mutex = xSemaphoreCreateMutex();
     if (ttx_fifo_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create TTX FIFO mutex");
-        return;
+        ttx_fifo_mutex = xSemaphoreCreateMutex();
+        if (ttx_fifo_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create TTX FIFO mutex");
+            return;
+        }
     }
 
-    xTaskCreate(adapt_ble_task, "AdaptBLE", 4 * 1024, NULL, 5, NULL);
+    if (g_adapt_ble_task_handle == NULL) {
+        BaseType_t rc = xTaskCreate(adapt_ble_task, "AdaptBLE", 4 * 1024, NULL, 5,
+                                     &g_adapt_ble_task_handle);
+        if (rc != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create AdaptBLE task");
+            return;
+        }
+    }
+
+    g_adapt_ble_running = true;
+    ESP_LOGI(TAG, "AdaptBLE task resumed");
+}
+
+void adapt_ble_stop(void) {
+    g_adapt_ble_running = false;
+    ESP_LOGI(TAG, "AdaptBLE task stopped");
 }
 
 #endif /* ADAPT_BLE */

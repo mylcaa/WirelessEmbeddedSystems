@@ -29,11 +29,19 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 
+#include "sdkconfig.h"
+
 /*************************************************************************************/
 /*                                  DEFINITIONS                                      */
 /*************************************************************************************/
 
 #define TAG "Central"
 #define DEVICE_NAME "Central"
+
+
+#ifdef CONFIG_ADAPT_BLE
+#define ADAPT_BLE
+#endif
+
 
 #endif // COMMON_H

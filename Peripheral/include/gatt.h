@@ -5,5 +5,6 @@
 
 void gatt_svr_init(void);
 uint16_t gatt_svr_get_tx_pwr_handle(void);
+uint16_t gatt_svr_get_stream_handle(void);
 
 #endif // GATT_SVC_H

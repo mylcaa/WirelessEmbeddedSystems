@@ -6,10 +6,8 @@
 #include "console.h"
 #include "gap.h"
 #include "led.h"
-
-#ifdef ADAPT_BLE
 #include "adapt_ble.h"
-#endif
+
 
 /*************************************************************************************/
 /*                             FUNCTIONS DECLARATIONS                                */

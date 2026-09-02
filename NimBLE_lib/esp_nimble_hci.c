@@ -31,9 +31,17 @@
 #include "ble_log.h"
 #endif /* CONFIG_BLE_LOG_ENABLED */
 
+/* BEGIN ADAPT_BLE FIX */
+#include "sdkconfig.h"
+#if CONFIG_ADAPT_BLE
+#define ADAPT_BLE
+#endif
+
 #ifdef ADAPT_BLE
 #include "esp_timer.h"
-#include "adapt_ble.h"
+
+/* Forward declaration; defined in main/src/adapt_ble.c */
+void ttx_pending_fifo_push(uint64_t timestamp, bool complete);
 #endif /* ADAPT_BLE */
 
 #define NIMBLE_VHCI_TIMEOUT_MS  2000
@@ -150,7 +158,9 @@ int ble_hci_trans_hs_acl_tx(struct os_mbuf *om)
 
     #ifdef ADAPT_BLE
     // get T_ADD
-    ttx_pending_fifo_push(esp_timer_get_time(), false);
+    uint64_t t_add = esp_timer_get_time();
+    ttx_pending_fifo_push(t_add, false);
+    //ESP_LOGI(TAG, "AdaptBLE: T_ADD=%llu", t_add);
     #endif /* ADAPT_BLE */
 
     if (xSemaphoreTake(vhci_send_sem, NIMBLE_VHCI_TIMEOUT_MS / portTICK_PERIOD_MS) == pdTRUE) {

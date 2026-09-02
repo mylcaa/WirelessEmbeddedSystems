@@ -178,20 +178,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                      "AdaptBLE TX-power characteristic handle: 0x%04X",
                      gatt_svr_get_tx_pwr_handle());
 
-            /* Try to update connection parameters */
-            /*struct ble_gap_upd_params params = {.itvl_min = desc.conn_itvl,
-                                                .itvl_max = desc.conn_itvl,
-                                                .latency = 3,
-                                                .supervision_timeout =
-                                                    desc.supervision_timeout};
-            rc = ble_gap_update_params(event->connect.conn_handle, &params);
-            if (rc != 0) {
-                ESP_LOGE(
-                    TAG,
-                    "failed to update connection parameters, error code: %d",
-                    rc);
-                return rc;
-            }*/
+            
+            ESP_LOGI(TAG,
+                     "AdaptBLE dummy stream characteristic handle: 0x%04X",
+                     gatt_svr_get_stream_handle());
         }
         /* Connection failed, restart advertising */
         else {

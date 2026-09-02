@@ -5,12 +5,6 @@
 /*                                     INCLUDES                                      */
 /*************************************************************************************/
 
-#include "sdkconfig.h"
-
-#ifdef CONFIG_ADAPT_BLE
-#define ADAPT_BLE
-#endif
-
 #ifdef ADAPT_BLE
 
 #include <stdint.h>
@@ -75,9 +69,16 @@ void adapt_ble_set_connection_interval(uint32_t t_ci_ms);
  * @brief Start the periodic AdaptBLE adaptation task.
  *
  * The task runs every UPDATE_PERIOD_MS (1 second by default) and calls
- * adapt_ble_run_once().
+ * adapt_ble_run_once() while a connection is active.
  */
 void adapt_ble_start(void);
+
+/**
+ * @brief Stop the periodic AdaptBLE adaptation task.
+ *
+ * The task remains alive but stops executing adapt_ble_run_once().
+ */
+void adapt_ble_stop(void);
 
 /**
  * @brief Send the requested TX power level to the slave via GATT write.

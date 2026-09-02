@@ -31,9 +31,17 @@
 #include "host/ble_hs_iso.h"
 #endif /* MYNEWT_VAL(BLE_ISO) */
 
+
+#include "sdkconfig.h"
+#if CONFIG_ADAPT_BLE
+#define ADAPT_BLE
+#endif
+
 #ifdef ADAPT_BLE
 #include "esp_timer.h"
-#include "adapt_ble.h"
+
+/* Forward declaration; defined in main/src/adapt_ble.c */
+void ttx_pending_fifo_push(uint64_t timestamp, bool complete);
 #endif /* ADAPT_BLE */
 
 #if MYNEWT_VAL(BLE_ENABLE_CONN_REATTEMPT)
@@ -660,6 +668,7 @@ ble_hs_hci_evt_num_completed_pkts(uint8_t event_code, const void *data,
 
     #ifdef ADAPT_BLE
     uint64_t t_free = esp_timer_get_time();
+    //BLE_HS_LOG(ERROR, "AdaptBLE: T_FREE=%llu\n", t_free);
     #endif /* ADAPT_BLE */
 
     if (len < sizeof(*ev)) {
@@ -680,6 +689,7 @@ ble_hs_hci_evt_num_completed_pkts(uint8_t event_code, const void *data,
             int j;
             for (j = 0; j < num_pkts; j++) {
                 ttx_pending_fifo_push(t_free, true);
+                //BLE_HS_LOG(ERROR, "AdaptBLE: pkt=%d/%d\n", j, num_pkts);
             }
         }
         #endif /* ADAPT_BLE */

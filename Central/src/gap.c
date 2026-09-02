@@ -8,6 +8,7 @@
 
 #ifdef ADAPT_BLE
 #include "adapt_ble.h"
+#include "adapt_ble_gatt.h"
 #endif
 
 /*************************************************************************************/
@@ -167,6 +168,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 
 #ifdef ADAPT_BLE
             adapt_ble_set_connection_interval((desc.conn_itvl * 1250U) / 1000U);
+            adapt_ble_start();
+            adapt_ble_gatt_start(event->connect.conn_handle);
 #endif
         }
         /* Connection failed */
@@ -188,6 +191,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         memset(&connected_addr, 0, sizeof(connected_addr));
         connected_name[0] = '\0';
         gap_state = GAP_STATE_IDLE;
+
+#ifdef ADAPT_BLE
+        adapt_ble_gatt_stop();
+        adapt_ble_stop();
+#endif
         return rc;
 
     /* Connection parameters update event */

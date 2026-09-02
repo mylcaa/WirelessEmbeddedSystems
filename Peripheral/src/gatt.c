@@ -16,8 +16,13 @@
 #define ADAPT_BLE_TX_PWR_SVC_UUID 0xAD80
 #define ADAPT_BLE_TX_PWR_CHR_UUID 0xAD81
 
-/* Variable that receives the assigned characteristic value handle */
+/* 16-bit custom UUIDs for the AdaptBLE dummy stream service */
+#define ADAPT_BLE_STREAM_SVC_UUID 0xAD90
+#define ADAPT_BLE_STREAM_CHR_UUID 0xAD91
+
+/* Variables that receive the assigned characteristic value handles */
 static uint16_t tx_pwr_val_handle;
+static uint16_t stream_val_handle;
 
 /*************************************************************************************/
 /*                                 PRIVATE FUNCTIONS                                 */
@@ -67,6 +72,31 @@ static int tx_pwr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+static int stream_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                            struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+    if (om_len == 0) {
+        return 0;
+    }
+
+    /* Log a summary every N bytes */
+    static uint32_t stream_bytes = 0;
+    stream_bytes += om_len;
+    if (stream_bytes % 512U < om_len) {
+        ESP_LOGI(TAG, "Dummy stream received: %u bytes total", stream_bytes);
+    }
+
+    return 0;
+}
+
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -81,6 +111,19 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             { 0 }
         }
     },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(ADAPT_BLE_STREAM_SVC_UUID),
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            {
+                .uuid = BLE_UUID16_DECLARE(ADAPT_BLE_STREAM_CHR_UUID),
+                .access_cb = stream_access_cb,
+                .flags = BLE_GATT_CHR_F_WRITE,
+                .val_handle = &stream_val_handle,
+            },
+            { 0 }
+        }
+    },
     { 0 }
 };
 
@@ -91,6 +134,10 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
 
 uint16_t gatt_svr_get_tx_pwr_handle(void) {
     return tx_pwr_val_handle;
+}
+
+uint16_t gatt_svr_get_stream_handle(void) {
+    return stream_val_handle;
 }
 
 void gatt_svr_init(void) {
@@ -111,4 +158,8 @@ void gatt_svr_init(void) {
     ESP_LOGI(TAG,
              "AdaptBLE TX-power GATT service registered (svc=0x%04X, chr=0x%04X)",
              ADAPT_BLE_TX_PWR_SVC_UUID, ADAPT_BLE_TX_PWR_CHR_UUID);
+
+    ESP_LOGI(TAG,
+             "AdaptBLE dummy-stream GATT service registered (svc=0x%04X, chr=0x%04X)",
+             ADAPT_BLE_STREAM_SVC_UUID, ADAPT_BLE_STREAM_CHR_UUID);
 }
